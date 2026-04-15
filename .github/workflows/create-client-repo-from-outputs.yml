@@ -1,0 +1,143 @@
+name: Create client repo from outputs
+
+on:
+  push:
+    paths:
+      - "outputs/**/*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish-new-client-files:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect newly added markdown files
+        id: changed
+        uses: tj-actions/changed-files@v46
+        with:
+          files: outputs/**/*.md
+          separator: "\n"
+
+      - name: Create private repo and upload each new file
+        if: steps.changed.outputs.added_files != ''
+        uses: actions/github-script@v7
+        env:
+          ADDED_FILES: ${{ steps.changed.outputs.added_files }}
+          TARGET_OWNER: ${{ vars.CLIENT_REPO_OWNER }}
+          REPO_PREFIX: ${{ vars.CLIENT_REPO_PREFIX }}
+          FILE_DEST_PATH: ${{ vars.CLIENT_FILE_PATH }}
+        with:
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+
+            const owner = (process.env.TARGET_OWNER || '').trim() || context.repo.owner;
+            const repoPrefix = (process.env.REPO_PREFIX || '').trim();
+            const fileDestPath = (process.env.FILE_DEST_PATH || '').trim();
+            const addedFiles = (process.env.ADDED_FILES || '')
+              .split(/\r?\n/)
+              .map((f) => f.trim())
+              .filter(Boolean);
+
+            if (!addedFiles.length) {
+              core.info('No newly added files in outputs/.');
+              return;
+            }
+
+            const { data: ownerInfo } = await github.rest.users.getByUsername({ username: owner });
+            const ownerType = ownerInfo.type;
+
+            const toRepoName = (input) =>
+              `${repoPrefix}${input}`
+                .toLowerCase()
+                .replace(/[^a-z0-9._-]/g, '-')
+                .replace(/-+/g, '-')
+                .replace(/^-|-$/g, '');
+
+            for (const relativeFile of addedFiles) {
+              const baseName = path.basename(relativeFile, path.extname(relativeFile));
+              const repoName = toRepoName(baseName);
+
+              if (!repoName) {
+                core.warning(`Skipping ${relativeFile}: unable to generate valid repo name.`);
+                continue;
+              }
+
+              let exists = true;
+              try {
+                await github.rest.repos.get({ owner, repo: repoName });
+              } catch (error) {
+                if (error.status === 404) {
+                  exists = false;
+                } else {
+                  throw error;
+                }
+              }
+
+              if (!exists) {
+                core.info(`Creating private repo ${owner}/${repoName}`);
+                if (ownerType === 'Organization') {
+                  await github.rest.repos.createInOrg({
+                    org: owner,
+                    name: repoName,
+                    private: true,
+                    auto_init: true,
+                    description: `Client repo for ${baseName}`,
+                  });
+                } else {
+                  await github.rest.repos.createForAuthenticatedUser({
+                    name: repoName,
+                    private: true,
+                    auto_init: true,
+                    description: `Client repo for ${baseName}`,
+                  });
+                }
+              } else {
+                core.info(`Repo already exists: ${owner}/${repoName}`);
+              }
+
+              const sourceAbsPath = path.join(process.env.GITHUB_WORKSPACE, relativeFile);
+              const targetPath = fileDestPath || path.basename(relativeFile);
+              const content = fs.readFileSync(sourceAbsPath, 'utf8');
+
+              let existingSha;
+              try {
+                const current = await github.rest.repos.getContent({
+                  owner,
+                  repo: repoName,
+                  path: targetPath,
+                });
+
+                if (!Array.isArray(current.data) && current.data.sha) {
+                  existingSha = current.data.sha;
+                }
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+
+              await github.rest.repos.createOrUpdateFileContents({
+                owner,
+                repo: repoName,
+                path: targetPath,
+                message: `Add ${path.basename(relativeFile)} from ${context.repo.repo}@${context.sha.slice(0, 7)}`,
+                content: Buffer.from(content, 'utf8').toString('base64'),
+                sha: existingSha,
+              });
+
+              core.info(`Uploaded ${relativeFile} to ${owner}/${repoName}:${targetPath}`);
+            }
+
+      - name: No new files
+        if: steps.changed.outputs.added_files == ''
+        run: echo "No newly added markdown files in outputs/."

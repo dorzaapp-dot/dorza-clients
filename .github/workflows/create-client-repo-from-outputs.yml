@@ -67,38 +67,40 @@ jobs:
                 .replace(/-+/g, '-')
                 .replace(/^-|-$/g, '');
 
-            const claudeWorkflowContent = `name: Claude Build Website
-
-on:
-  push:
-    paths:
-      - "**/*.md"
-  workflow_dispatch:
-
-permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-
-jobs:
-  claude-build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build website from markdown with Claude
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: \${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: |
-            Build a production-ready static website from the markdown content in this repository.
-            Requirements:
-            - Use the markdown file as the source of truth for content
-            - Create a clean and responsive website
-            - Include all files needed to run the site
-            - Commit changes on a new branch and open a pull request
-`;
+            const expr = (s) => '$' + '{{' + ' ' + s + ' ' + '}}';
+            const claudeWorkflowContent = [
+              'name: Claude Build Website',
+              '',
+              'on:',
+              '  push:',
+              '    paths:',
+              '      - "**/*.md"',
+              '  workflow_dispatch:',
+              '',
+              'permissions:',
+              '  contents: write',
+              '  pull-requests: write',
+              '  issues: write',
+              '',
+              'jobs:',
+              '  claude-build:',
+              '    runs-on: ubuntu-latest',
+              '    steps:',
+              '      - name: Checkout',
+              '        uses: actions/checkout@v4',
+              '',
+              '      - name: Build website from markdown with Claude',
+              '        uses: anthropics/claude-code-action@v1',
+              '        with:',
+              `          anthropic_api_key: ${expr('secrets.ANTHROPIC_API_KEY')}`,
+              '          prompt: |',
+              '            Build a production-ready static website from the markdown content in this repository.',
+              '            Requirements:',
+              '            - Use the markdown file as the source of truth for content',
+              '            - Create a clean and responsive website',
+              '            - Include all files needed to run the site',
+              '            - Commit changes on a new branch and open a pull request',
+            ].join('\n');
 
             for (const relativeFile of addedFiles) {
               const baseName = path.basename(relativeFile, path.extname(relativeFile));

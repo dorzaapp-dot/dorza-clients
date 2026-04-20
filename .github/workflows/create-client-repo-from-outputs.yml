@@ -193,15 +193,27 @@ jobs:
                 }
 
                 if (!workflowExists) {
-                  await github.rest.repos.createOrUpdateFileContents({
-                    owner,
-                    repo: repoName,
-                    path: claudeWorkflowPath,
-                    message: `Add Claude build workflow from ${context.repo.repo}@${context.sha.slice(0, 7)}`,
-                    content: Buffer.from(claudeWorkflowContent, 'utf8').toString('base64'),
-                  });
-
-                  core.info(`Bootstrapped Claude workflow in ${owner}/${repoName}:${claudeWorkflowPath}`);
+                  try {
+                    await github.rest.repos.createOrUpdateFileContents({
+                      owner,
+                      repo: repoName,
+                      path: claudeWorkflowPath,
+                      message: `Add Claude build workflow from ${context.repo.repo}@${context.sha.slice(0, 7)}`,
+                      content: Buffer.from(claudeWorkflowContent, 'utf8').toString('base64'),
+                    });
+                    core.info(`Bootstrapped Claude workflow in ${owner}/${repoName}:${claudeWorkflowPath}`);
+                  } catch (bootstrapError) {
+                    if (bootstrapError.status === 403) {
+                      core.warning(
+                        `Could not write Claude workflow to ${owner}/${repoName}: 403 Forbidden.\n` +
+                        `Your REPO_ADMIN_TOKEN needs the "workflow" scope in addition to "repo".\n` +
+                        `Go to GitHub → Settings → Developer settings → Personal access tokens → ` +
+                        `edit your token → check the "workflow" checkbox → save.`
+                      );
+                    } else {
+                      throw bootstrapError;
+                    }
+                  }
                 } else {
                   core.info(`Claude workflow already exists in ${owner}/${repoName}; skipping bootstrap.`);
                 }

@@ -34,6 +34,8 @@ jobs:
           TARGET_OWNER: ${{ vars.CLIENT_REPO_OWNER }}
           REPO_PREFIX: ${{ vars.CLIENT_REPO_PREFIX }}
           FILE_DEST_PATH: ${{ vars.CLIENT_FILE_PATH }}
+          ENABLE_CLAUDE_BOOTSTRAP: ${{ vars.ENABLE_CLAUDE_BOOTSTRAP }}
+          CLAUDE_WORKFLOW_PATH: ${{ vars.CLAUDE_WORKFLOW_PATH }}
         with:
           github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
           script: |
@@ -43,6 +45,8 @@ jobs:
             const owner = (process.env.TARGET_OWNER || '').trim() || context.repo.owner;
             const repoPrefix = (process.env.REPO_PREFIX || '').trim();
             const fileDestPath = (process.env.FILE_DEST_PATH || '').trim();
+            const enableClaudeBootstrap = (process.env.ENABLE_CLAUDE_BOOTSTRAP || 'true').trim().toLowerCase() !== 'false';
+            const claudeWorkflowPath = (process.env.CLAUDE_WORKFLOW_PATH || '').trim() || '.github/workflows/claude-build-website.yml';
             const addedFiles = (process.env.ADDED_FILES || '')
               .split(/\r?\n/)
               .map((f) => f.trim())
@@ -62,6 +66,39 @@ jobs:
                 .replace(/[^a-z0-9._-]/g, '-')
                 .replace(/-+/g, '-')
                 .replace(/^-|-$/g, '');
+
+            const claudeWorkflowContent = `name: Claude Build Website
+
+on:
+  push:
+    paths:
+      - "**/*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  claude-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build website from markdown with Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: \${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Build a production-ready static website from the markdown content in this repository.
+            Requirements:
+            - Use the markdown file as the source of truth for content
+            - Create a clean and responsive website
+            - Include all files needed to run the site
+            - Commit changes on a new branch and open a pull request
+`;
 
             for (const relativeFile of addedFiles) {
               const baseName = path.basename(relativeFile, path.extname(relativeFile));
@@ -136,6 +173,39 @@ jobs:
               });
 
               core.info(`Uploaded ${relativeFile} to ${owner}/${repoName}:${targetPath}`);
+
+              if (enableClaudeBootstrap) {
+                let workflowExists = true;
+                try {
+                  await github.rest.repos.getContent({
+                    owner,
+                    repo: repoName,
+                    path: claudeWorkflowPath,
+                  });
+                } catch (error) {
+                  if (error.status === 404) {
+                    workflowExists = false;
+                  } else {
+                    throw error;
+                  }
+                }
+
+                if (!workflowExists) {
+                  await github.rest.repos.createOrUpdateFileContents({
+                    owner,
+                    repo: repoName,
+                    path: claudeWorkflowPath,
+                    message: `Add Claude build workflow from ${context.repo.repo}@${context.sha.slice(0, 7)}`,
+                    content: Buffer.from(claudeWorkflowContent, 'utf8').toString('base64'),
+                  });
+
+                  core.info(`Bootstrapped Claude workflow in ${owner}/${repoName}:${claudeWorkflowPath}`);
+                } else {
+                  core.info(`Claude workflow already exists in ${owner}/${repoName}; skipping bootstrap.`);
+                }
+              } else {
+                core.info('Claude workflow bootstrap disabled by ENABLE_CLAUDE_BOOTSTRAP variable.');
+              }
             }
 
       - name: No new files
